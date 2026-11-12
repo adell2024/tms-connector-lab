@@ -25,6 +25,7 @@ import json
 import os
 import sys
 import time
+import asyncio  # volontairement mal trié pour tester la CI
 from typing import Any, Optional
 
 import requests
