@@ -1,0 +1,15 @@
+{
+  "expeditions": [
+    {
+      "id": "1",
+      "ordre_id": "ORD-001",
+      "origine": "Paris",
+      "destination": "Lyon",
+      "statut": "CREATED"
+    }
+  ],
+  "token": {
+    "access_token": "test-token"
+  },
+  "shipments": []
+}

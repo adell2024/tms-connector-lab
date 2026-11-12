@@ -12,8 +12,12 @@ venv/
 .env
 .env.*
 db.json
+!db.seed.json
 !carrier-api/db.json
 *.log
+
+# Artefacts des tests E2E
+.e2e/
 
 # Outils / OS
 node_modules/
