@@ -1,0 +1,1124 @@
+openapi: 3.0.3
+info:
+  title: TMS Connector API — Gestion des expéditions
+  version: 1.0.0
+  description: |
+    Contrat d'interface pour le flux de création et de suivi des expéditions
+    dans le TMS (Transport Management System).
+
+    ## Flux de création d'expédition
+
+    1. Le client appelle `POST /shipments` avec les adresses d'enlèvement et de
+       livraison, les colis, l'Incoterm et les dates souhaitées.
+    2. Le TMS valide la requête, attribue un numéro d'expédition et le statut
+       `CREATED`, puis renvoie `201 Created` avec l'en-tête `Location`.
+    3. Le client consulte l'expédition via `GET /shipments/{shipmentId}`.
+    4. Le TMS planifie le transport, assigne un transporteur et notifie les
+       changements de statut via webhooks (`POST /webhooks/shipment-events`).
+
+    Les erreurs respectent le format RFC 7807 (`application/problem+json`).
+    La création est idempotente via l'en-tête `Idempotency-Key`.
+
+  contact:
+    name: Équipe Architecture API
+    email: api-architecture@exemple.com
+  license:
+    name: Propriétaire
+
+servers:
+  - url: https://api.tms.exemple.com/v1
+    description: Production
+  - url: https://api-sandbox.tms.exemple.com/v1
+    description: Sandbox
+
+tags:
+  - name: Shipments
+    description: Cycle de vie des expéditions (création, consultation, mise à jour, annulation)
+  - name: Webhooks
+    description: Notifications d'événements émis par le TMS
+
+paths:
+  /shipments:
+    post:
+      summary: Créer une expédition
+      operationId: createShipment
+      tags:
+        - Shipments
+      description: |
+        Crée une expédition dans le TMS.
+
+        - La requête est **idempotente** : transmettre `Idempotency-Key`
+          (UUID) pour éviter les doublons en cas de nouvelle tentative.
+        - Le statut initial de l'expédition est `CREATED`.
+        - La réponse renvoie l'en-tête `Location` pointant vers l'expédition créée.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShipmentCreateRequest'
+            example:
+              clientReference: CMD-2026-004821
+              clientOrderReference: PO-98765
+              incoterm: DAP
+              serviceLevel: express
+              carrierPreference: GEODIS
+              requestedPickupAt: "2026-11-13T08:00:00+01:00"
+              requestedDeliveryAt: "2026-11-16T18:00:00+01:00"
+              pickup:
+                name: Entrepôt Lyon Nord
+                contactName: Marie Dupont
+                phone: "+33 4 72 00 00 00"
+                email: expeditions@exemple.com
+                street: 15 avenue de la République
+                postalCode: "69003"
+                city: Lyon
+                countryCode: FR
+                deliveryInstructions: Sonner à l'interphone B3
+              delivery:
+                name: SARL Distribution Sud
+                contactName: Jean Martin
+                phone: "+33 4 91 00 00 00"
+                email: reception@sarl-sud.fr
+                street: 8 boulevard de la Joliette
+                postalCode: "13002"
+                city: Marseille
+                countryCode: FR
+                appointmentSlot:
+                  startAt: "2026-11-16T14:00:00+01:00"
+                  endAt: "2026-11-16T16:00:00+01:00"
+              packages:
+                - packageReference: COLIS-001
+                  quantity: 2
+                  weight:
+                    value: 12.5
+                    unit: kg
+                  dimensions:
+                    length: 60
+                    width: 40
+                    height: 30
+                    unit: cm
+                  stackable: true
+                  contentsDescription: Pièces de rechange automobile
+                  declaredValue:
+                    value: 450.00
+                    currency: EUR
+              totalWeight:
+                value: 25.0
+                unit: kg
+              totalVolume:
+                value: 0.144
+                unit: m3
+              specialInstructions: Livrer au quai B, créneau 14h-16h
+              metadata:
+                costCenter: CC-123
+                project: PROJ-X
+      responses:
+        '201':
+          description: Expédition créée avec succès
+          headers:
+            Location:
+              description: URL canonique de l'expédition créée
+              schema:
+                type: string
+                format: uri
+                example: /shipments/550e8400-e29b-41d4-a716-446655440000
+            Idempotency-Key:
+              description: Clé d'idempotence de la création (retournée pour traçabilité)
+              schema:
+                type: string
+            X-Request-ID:
+              description: Identifiant de requête pour le support
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShipmentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+    get:
+      summary: Lister les expéditions
+      operationId: listShipments
+      tags:
+        - Shipments
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/ShipmentStatusFilter'
+        - $ref: '#/components/parameters/ClientReferenceFilter'
+        - $ref: '#/components/parameters/UpdatedSince'
+      responses:
+        '200':
+          description: Liste paginée d'expéditions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShipmentList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+  /shipments/{shipmentId}:
+    get:
+      summary: Consulter une expédition
+      operationId: getShipment
+      tags:
+        - Shipments
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ShipmentId'
+      responses:
+        '200':
+          description: Détails de l'expédition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShipmentResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+    patch:
+      summary: Mettre à jour une expédition
+      operationId: updateShipment
+      tags:
+        - Shipments
+      description: |
+        Autorisé uniquement tant que l'expédition est au statut `DRAFT` ou
+        `CREATED`. Une fois planifiée (`PLANNED`), seule l'annulation est possible.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ShipmentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShipmentUpdateRequest'
+      responses:
+        '200':
+          description: Expédition mise à jour
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShipmentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+    delete:
+      summary: Annuler une expédition
+      operationId: cancelShipment
+      tags:
+        - Shipments
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ShipmentId'
+      responses:
+        '204':
+          description: Expédition annulée
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+  /webhooks/shipment-events:
+    post:
+      summary: Réception d'événements d'expédition (webhook TMS → client)
+      operationId: receiveShipmentEvent
+      tags:
+        - Webhooks
+      description: |
+        Le TMS appelle cet endpoint pour notifier les changements de statut
+        d'une expédition (création, planification, enlèvement, livraison, exception).
+        Le client doit répondre `200` rapidement et traiter l'événement de
+        manière idempotente via l'en-tête `X-Webhook-Event-ID`.
+      security:
+        - webhookSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShipmentEvent'
+      responses:
+        '200':
+          description: Événement accepté
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        default:
+          $ref: '#/components/responses/DefaultError'
+
+components:
+  schemas:
+    ShipmentCreateRequest:
+      type: object
+      required:
+        - clientReference
+        - pickup
+        - delivery
+        - packages
+        - incoterm
+      properties:
+        clientReference:
+          type: string
+          maxLength: 100
+          description: "Référence client (ex: numéro de commande, BL, bon de livraison)"
+          example: CMD-2026-004821
+        clientOrderReference:
+          type: string
+          maxLength: 100
+          description: Référence de commande côté expéditeur
+          example: PO-98765
+        incoterm:
+          type: string
+          enum:
+            - EXW
+            - FCA
+            - CPT
+            - CIP
+            - DAP
+            - DPU
+            - DDP
+            - FAS
+            - FOB
+            - CFR
+            - CIF
+          description: Incoterm 2020 régissant le transport
+          example: DAP
+        pickup:
+          $ref: '#/components/schemas/Location'
+          description: Lieu d'enlèvement
+        delivery:
+          $ref: '#/components/schemas/Location'
+          description: Lieu de livraison
+        returnLocation:
+          $ref: '#/components/schemas/Location'
+          description: Lieu de retour (expéditeur), recommandé selon l'Incoterm
+        requestedPickupAt:
+          type: string
+          format: date-time
+          description: Date/heure souhaitée d'enlèvement
+          example: "2026-11-13T08:00:00+01:00"
+        requestedDeliveryAt:
+          type: string
+          format: date-time
+          description: Date/heure souhaitée de livraison (au plus tard)
+          example: "2026-11-16T18:00:00+01:00"
+        packages:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/Package'
+          description: Colis de l'expédition (au moins un)
+        totalWeight:
+          $ref: '#/components/schemas/Weight'
+          description: Poids total de l'expédition
+        totalVolume:
+          $ref: '#/components/schemas/Volume'
+          description: Volume total de l'expédition
+        dangerousGoods:
+          type: boolean
+          default: false
+          description: Marchandises dangereuses
+        dangerousGoodsDetails:
+          $ref: '#/components/schemas/DangerousGoodsDetails'
+        serviceLevel:
+          type: string
+          enum:
+            - standard
+            - express
+            - priority
+            - economy
+          default: standard
+          description: Niveau de service souhaité
+        carrierPreference:
+          type: string
+          maxLength: 50
+          description: Transporteur privilégié (code interne ou nom)
+          example: GEODIS
+        insurance:
+          $ref: '#/components/schemas/Insurance'
+        cashOnDelivery:
+          $ref: '#/components/schemas/Amount'
+          description: Contre-remboursement à la livraison
+        specialInstructions:
+          type: string
+          maxLength: 1000
+          description: Instructions particulières (accès, créneau, quai)
+          example: Livrer au quai B, vorbe de 14h à 16h
+        metadata:
+          type: object
+          description: Métadonnées client (clé/valeur)
+          example:
+            costCenter: CC-123
+            project: PROJ-X
+        documents:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentReference'
+          description: Documents joints (facture, liste de colisage, certificat d'origine)
+
+    Location:
+      type: object
+      required:
+        - name
+        - street
+        - postalCode
+        - city
+        - countryCode
+      properties:
+        name:
+          type: string
+          maxLength: 150
+          example: Entrepôt Nord - Quai 3
+        contactName:
+          type: string
+          maxLength: 100
+        phone:
+          type: string
+          maxLength: 30
+        email:
+          type: string
+          format: email
+        street:
+          type: string
+          maxLength: 200
+        street2:
+          type: string
+          maxLength: 200
+        postalCode:
+          type: string
+          maxLength: 20
+        city:
+          type: string
+          maxLength: 100
+        region:
+          type: string
+          maxLength: 100
+          description: Département, région ou état
+        countryCode:
+          type: string
+          pattern: "^[A-Z]{2}$"
+          description: Code pays ISO 3166-1 alpha-2
+          example: FR
+        isDeliveryPoint:
+          type: boolean
+          default: false
+        deliveryInstructions:
+          type: string
+          maxLength: 500
+        appointmentSlot:
+          $ref: '#/components/schemas/AppointmentSlot'
+
+    AppointmentSlot:
+      type: object
+      properties:
+        startAt:
+          type: string
+          format: date-time
+        endAt:
+          type: string
+          format: date-time
+
+    Package:
+      type: object
+      required:
+        - packageReference
+        - weight
+        - dimensions
+      properties:
+        packageReference:
+          type: string
+          maxLength: 50
+          example: COLIS-001
+        quantity:
+          type: integer
+          minimum: 1
+          default: 1
+        weight:
+          $ref: '#/components/schemas/Weight'
+        dimensions:
+          $ref: '#/components/schemas/Dimensions'
+        stackable:
+          type: boolean
+          default: true
+        contentsDescription:
+          type: string
+          maxLength: 200
+        hsCode:
+          type: string
+          maxLength: 20
+          description: Code SH douanier
+        declaredValue:
+          $ref: '#/components/schemas/Amount'
+        serialNumbers:
+          type: array
+          items:
+            type: string
+            maxLength: 50
+
+    Weight:
+      type: object
+      required:
+        - value
+        - unit
+      properties:
+        value:
+          type: number
+          minimum: 0
+        unit:
+          type: string
+          enum:
+            - g
+            - kg
+            - t
+          default: kg
+
+    Volume:
+      type: object
+      required:
+        - value
+        - unit
+      properties:
+        value:
+          type: number
+          minimum: 0
+        unit:
+          type: string
+          enum:
+            - cm3
+            - m3
+          default: m3
+
+    Dimensions:
+      type: object
+      required:
+        - length
+        - width
+        - height
+        - unit
+      properties:
+        length:
+          type: number
+          minimum: 0
+        width:
+          type: number
+          minimum: 0
+        height:
+          type: number
+          minimum: 0
+        unit:
+          type: string
+          enum:
+            - mm
+            - cm
+            - m
+          default: cm
+
+    DangerousGoodsDetails:
+      type: object
+      required:
+        - unNumber
+        - properShippingName
+        - transportClass
+      properties:
+        unNumber:
+          type: string
+          pattern: "^UN[0-9]{4}$"
+          example: UN1230
+        properShippingName:
+          type: string
+          example: Methanol
+        transportClass:
+          type: string
+          maxLength: 10
+          example: "3"
+        packingGroup:
+          type: string
+          enum:
+            - I
+            - II
+            - III
+        packagingCode:
+          type: string
+        netMass:
+          $ref: '#/components/schemas/Weight'
+
+    Insurance:
+      type: object
+      required:
+        - coveredValue
+      properties:
+        coveredValue:
+          $ref: '#/components/schemas/Amount'
+        insurer:
+          type: string
+        policyNumber:
+          type: string
+
+    Amount:
+      type: object
+      required:
+        - value
+        - currency
+      properties:
+        value:
+          type: number
+        currency:
+          type: string
+          pattern: "^[A-Z]{3}$"
+          example: EUR
+
+    DocumentReference:
+      type: object
+      required:
+        - type
+        - url
+      properties:
+        type:
+          type: string
+          enum:
+            - invoice
+            - packingList
+            - certificateOfOrigin
+            - billOfLading
+            - other
+        url:
+          type: string
+          format: uri
+        filename:
+          type: string
+
+    ShipmentUpdateRequest:
+      type: object
+      properties:
+        requestedPickupAt:
+          type: string
+          format: date-time
+        requestedDeliveryAt:
+          type: string
+          format: date-time
+        specialInstructions:
+          type: string
+          maxLength: 1000
+        carrierPreference:
+          type: string
+          maxLength: 50
+        serviceLevel:
+          type: string
+          enum:
+            - standard
+            - express
+            - priority
+            - economy
+        packages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Package'
+        metadata:
+          type: object
+
+    Shipment:
+      type: object
+      required:
+        - id
+        - shipmentNumber
+        - status
+        - clientReference
+        - pickup
+        - delivery
+        - packages
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 550e8400-e29b-41d4-a716-446655440000
+        shipmentNumber:
+          type: string
+          maxLength: 50
+          example: TMS-2026-001234
+        status:
+          $ref: '#/components/schemas/ShipmentStatus'
+        clientReference:
+          type: string
+        incoterm:
+          type: string
+        pickup:
+          $ref: '#/components/schemas/Location'
+        delivery:
+          $ref: '#/components/schemas/Location'
+        returnLocation:
+          $ref: '#/components/schemas/Location'
+        requestedPickupAt:
+          type: string
+          format: date-time
+        requestedDeliveryAt:
+          type: string
+          format: date-time
+        actualPickupAt:
+          type: string
+          format: date-time
+        actualDeliveryAt:
+          type: string
+          format: date-time
+        packages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Package'
+        totalWeight:
+          $ref: '#/components/schemas/Weight'
+        totalVolume:
+          $ref: '#/components/schemas/Volume'
+        dangerousGoods:
+          type: boolean
+        serviceLevel:
+          type: string
+        carrierPreference:
+          type: string
+        carrierAssignment:
+          $ref: '#/components/schemas/CarrierAssignment'
+        trackingNumber:
+          type: string
+        trackingUrl:
+          type: string
+          format: uri
+        labels:
+          type: array
+          items:
+            $ref: '#/components/schemas/Label'
+        insurance:
+          $ref: '#/components/schemas/Insurance'
+        cashOnDelivery:
+          $ref: '#/components/schemas/Amount'
+        specialInstructions:
+          type: string
+        metadata:
+          type: object
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        links:
+          type: array
+          items:
+            $ref: '#/components/schemas/Link'
+
+    ShipmentStatus:
+      type: string
+      enum:
+        - DRAFT
+        - CREATED
+        - PLANNED
+        - AWAITING_PICKUP
+        - PICKED_UP
+        - IN_TRANSIT
+        - OUT_FOR_DELIVERY
+        - DELIVERED
+        - EXCEPTION
+        - CANCELLED
+        - RETURNED
+      example: CREATED
+
+    CarrierAssignment:
+      type: object
+      properties:
+        carrierCode:
+          type: string
+        carrierName:
+          type: string
+        serviceCode:
+          type: string
+        assignedAt:
+          type: string
+          format: date-time
+        driverName:
+          type: string
+        vehiclePlate:
+          type: string
+
+    Label:
+      type: object
+      required:
+        - type
+        - url
+      properties:
+        type:
+          type: string
+          enum:
+            - shippingLabel
+            - returnLabel
+            - dangerousGoodsLabel
+        url:
+          type: string
+          format: uri
+        format:
+          type: string
+          enum:
+            - pdf
+            - zpl
+            - png
+        expiresAt:
+          type: string
+          format: date-time
+
+    Link:
+      type: object
+      required:
+        - rel
+        - href
+      properties:
+        rel:
+          type: string
+        href:
+          type: string
+          format: uri
+        method:
+          type: string
+          enum:
+            - GET
+            - PUT
+            - POST
+            - PATCH
+            - DELETE
+
+    ShipmentResponse:
+      allOf:
+        - $ref: '#/components/schemas/Shipment'
+        - type: object
+          properties:
+            idempotencyKey:
+              type: string
+              description: Clé d'idempotence de la création (si fournie)
+
+    ShipmentList:
+      type: object
+      required:
+        - data
+        - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ShipmentSummary'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+        links:
+          $ref: '#/components/schemas/PaginationLinks'
+
+    ShipmentSummary:
+      type: object
+      required:
+        - id
+        - shipmentNumber
+        - status
+        - clientReference
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        shipmentNumber:
+          type: string
+        status:
+          $ref: '#/components/schemas/ShipmentStatus'
+        clientReference:
+          type: string
+        pickupCity:
+          type: string
+        deliveryCity:
+          type: string
+        actualDeliveryAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+
+    PaginationMeta:
+      type: object
+      required:
+        - page
+        - pageSize
+        - totalElements
+        - totalPages
+      properties:
+        page:
+          type: integer
+        pageSize:
+          type: integer
+        totalElements:
+          type: integer
+        totalPages:
+          type: integer
+
+    PaginationLinks:
+      type: object
+      properties:
+        self:
+          type: string
+          format: uri
+        next:
+          type: string
+          format: uri
+        prev:
+          type: string
+          format: uri
+
+    ShipmentEvent:
+      type: object
+      required:
+        - eventId
+        - eventType
+        - shipmentId
+        - occurredAt
+      properties:
+        eventId:
+          type: string
+          format: uuid
+        eventType:
+          type: string
+          enum:
+            - shipment.created
+            - shipment.updated
+            - shipment.planned
+            - shipment.picked_up
+            - shipment.in_transit
+            - shipment.out_for_delivery
+            - shipment.delivered
+            - shipment.exception
+            - shipment.cancelled
+        shipmentId:
+          type: string
+          format: uuid
+        shipmentNumber:
+          type: string
+        status:
+          $ref: '#/components/schemas/ShipmentStatus'
+        occurredAt:
+          type: string
+          format: date-time
+        carrierTrackingNumber:
+          type: string
+        details:
+          type: object
+        signatureProofUrl:
+          type: string
+          format: uri
+
+    # Format RFC 7807 (Problem Details for HTTP APIs)
+    Problem:
+      type: object
+      required:
+        - type
+        - title
+        - status
+      properties:
+        type:
+          type: string
+          format: uri
+          example: https://api.tms.exemple.com/problems/validation-error
+        title:
+          type: string
+          example: Erreur de validation de la requête
+        status:
+          type: integer
+          minimum: 100
+          maximum: 599
+          example: 422
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationError'
+
+    ValidationError:
+      type: object
+      required:
+        - field
+        - message
+      properties:
+        field:
+          type: string
+          example: packages[0].weight.value
+        message:
+          type: string
+          example: Le poids est requis et doit être positif.
+        code:
+          type: string
+          example: REQUIRED
+
+  parameters:
+    ShipmentId:
+      name: shipmentId
+      in: path
+      required: true
+      description: Identifiant unique de l'expédition (UUID)
+      schema:
+        type: string
+        format: uuid
+    Page:
+      name: page
+      in: query
+      description: Numéro de page (démarre à 1)
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      name: pageSize
+      in: query
+      description: Nombre d'éléments par page (max 100)
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    ShipmentStatusFilter:
+      name: status
+      in: query
+      description: Filtrer par statut d'expédition (valeurs multiples possibles)
+      schema:
+        type: array
+        items:
+          $ref: '#/components/schemas/ShipmentStatus'
+        style: form
+        explode: false
+    ClientReferenceFilter:
+      name: clientReference
+      in: query
+      description: Filtrer par référence client
+      schema:
+        type: string
+    UpdatedSince:
+      name: updatedSince
+      in: query
+      description: Filtrer les expéditions modifiées après cette date
+      schema:
+        type: string
+        format: date-time
+
+  responses:
+    BadRequest:
+      description: Requête mal formée
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: Non authentifié (jeton manquant ou invalide)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: Non autorisé pour cette opération
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: Ressource introuvable
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: "Conflit (ex: clé d'idempotence réutilisée, expédition déjà planifiée)"
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    UnprocessableEntity:
+      description: Erreur de validation métier
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    TooManyRequests:
+      description: Limite de débit (rate limiting) dépassée
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    DefaultError:
+      description: Erreur inattendue
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Jeton d'accès OAuth 2.0 / OIDC délivré par le fournisseur d'identité
+    webhookSignature:
+      type: apiKey
+      name: X-TMS-Signature
+      in: header
+      description: Signature HMAC-SHA256 du corps de la requête webhook (clé partagée TMS ↔ client)
+    apiKeyAuth:
+      type: apiKey
+      name: X-API-Key
+      in: header
+      description: Clé API simple (alternative au bearer pour les environnements de test)

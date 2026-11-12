@@ -1,0 +1,27 @@
+{
+  "token": {
+    "access_token": "faux-token-jwt-12345",
+    "expires_in": 3600
+  },
+  "shipments": [
+    {
+      "id": "TjYugaKlyZw",
+      "ordre_id": "ORD-2026-004821",
+      "origine": "Entrepôt Lyon Nord",
+      "destination": "SARL Distribution Sud, Marseille"
+    },
+    {
+      "id": "rZWfSO98LkE",
+      "ordre_id": "ORD-001",
+      "origine": "Paris",
+      "destination": "Lyon"
+    },
+    {
+      "id": "moFMEk-t1vc",
+      "ordre_id": "ORD-2026-004821",
+      "origine": "Entrepôt Lyon Nord",
+      "destination": "SARL Distribution Sud, Marseille"
+    }
+  ],
+  "$schema": "./node_modules/json-server/schema.json"
+}
