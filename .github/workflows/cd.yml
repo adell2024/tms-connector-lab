@@ -1,0 +1,25 @@
+name: CD
+
+on:
+  workflow_run:
+    workflows: ["E2E"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  deploy:
+    name: Deploy (simulation)
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Début du déploiement
+        run: echo "🚀 Début du déploiement en production..."
+
+      - name: Connexion au serveur de production
+        run: echo "Connexion au serveur de production simulée..."
+
+      - name: Attente
+        run: sleep 2
+
+      - name: Fin du déploiement
+        run: echo "✅ Déploiement réussi ! Le TMS est à jour."
